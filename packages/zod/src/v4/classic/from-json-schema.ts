@@ -1,6 +1,6 @@
 import type * as JSONSchema from "../core/json-schema.js";
 import { type $ZodRegistry, globalRegistry } from "../core/registries.js";
-import { assignProp, isPlainObject } from "../core/util.js";
+import { type JSONType, assignProp, isPlainObject } from "../core/util.js";
 import * as _checks from "./checks.js";
 import * as _iso from "./iso.js";
 import * as _schemas from "./schemas.js";
@@ -220,21 +220,23 @@ function checkObjectGuards(
  * length-prefixed so no value can spell another one. `null` means "never equal to anything" — a
  * cycle or a NaN, neither of which JSON can express.
  */
-function canonicalKey(value: unknown, seen: Set<object>): string | null {
+function canonicalKey(value: unknown, seen: Set<object>, jsonOnly = false): string | null {
   if (value === null) return "z";
   const type = typeof value;
   if (type !== "object") {
-    if (type === "number" && Number.isNaN(value)) return null;
+    if (jsonOnly && type !== "string" && type !== "number" && type !== "boolean") return null;
+    if (type === "number" && (jsonOnly ? !Number.isFinite(value) : Number.isNaN(value))) return null;
     const raw = String(value);
     return `${type[0]}${raw.length}:${raw}`;
   }
+  if (jsonOnly && !Array.isArray(value) && !isPlainObject(value)) return null;
   if (seen.has(value as object)) return null;
   seen.add(value as object);
   try {
     if (Array.isArray(value)) {
       const parts: string[] = [];
       for (const item of value) {
-        const key = canonicalKey(item, seen);
+        const key = canonicalKey(item, seen, jsonOnly);
         if (key === null) return null;
         parts.push(key);
       }
@@ -243,7 +245,7 @@ function canonicalKey(value: unknown, seen: Set<object>): string | null {
     const keys = Object.keys(value as object).sort();
     const parts: string[] = [];
     for (const k of keys) {
-      const key = canonicalKey((value as any)[k], seen);
+      const key = canonicalKey((value as any)[k], seen, jsonOnly);
       if (key === null) return null;
       parts.push(`${k.length}:${k}=${key}`);
     }
@@ -387,6 +389,12 @@ function getTupleRest(restSchema: JSONSchema._JSONSchema | undefined, ctx: Conve
 // the RFC 3339 full-time keyword, narrower than `z.iso.time()`; local because sharing it via `timeSource` pins that builder into every bundle (+139 B gzipped on a mini `z.boolean()`)
 const fullTime = /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 
+function convertLiteral(value: JSONType): ZodType {
+  if (value === null || typeof value !== "object") return z.literal(value);
+  const key = canonicalKey(value, new Set(), true);
+  return z.custom((input) => key !== null && canonicalKey(input, new Set(), true) === key);
+}
+
 function convertBaseSchema(schema: JSONSchema.JSONSchema, ctx: ConversionContext): ZodType {
   // Handle unsupported features
   if (schema.not !== undefined) {
@@ -452,14 +460,14 @@ function convertBaseSchema(schema: JSONSchema.JSONSchema, ctx: ConversionContext
       return z.never();
     }
     if (enumValues.length === 1) {
-      return z.literal(enumValues[0]!);
+      return convertLiteral(enumValues[0]!);
     }
     // Check if all values are strings
     if (enumValues.every((v) => typeof v === "string")) {
       return z.enum(enumValues as [string, ...string[]]);
     }
     // Mixed types - use union of literals
-    const literalSchemas = enumValues.map((v) => z.literal(v));
+    const literalSchemas = enumValues.map(convertLiteral);
     if (literalSchemas.length < 2) {
       return literalSchemas[0]!;
     }
@@ -472,7 +480,7 @@ function convertBaseSchema(schema: JSONSchema.JSONSchema, ctx: ConversionContext
 
   // Handle const
   if (schema.const !== undefined) {
-    return z.literal(schema.const);
+    return convertLiteral(schema.const);
   }
 
   // Handle type

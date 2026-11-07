@@ -307,6 +307,47 @@ test("const schema", () => {
   expect(() => schema.parse("world")).toThrow();
 });
 
+test("const compares objects and arrays structurally", () => {
+  const schema = fromJSONSchema({ const: { name: "a", values: [1, { enabled: true }] } });
+  const input = { values: [1, { enabled: true }], name: "a" };
+  expect(schema.parse(input)).toBe(input);
+  expect(schema.safeParse({ name: "a", values: [1, { enabled: false }] }).success).toBe(false);
+  expect(schema.safeParse({ ...input, extra: true }).success).toBe(false);
+  expect(schema.safeParse({ name: "a", values: [1] }).success).toBe(false);
+
+  const array = fromJSONSchema({ const: [1, 2] });
+  expect(array.parse([1, 2])).toEqual([1, 2]);
+  expect(array.safeParse([2, 1]).success).toBe(false);
+  expect(array.safeParse(1).success).toBe(false);
+  expect(array.safeParse({ 0: 1, 1: 2 }).success).toBe(false);
+});
+
+test("enum supports structural values alongside primitive values", () => {
+  const schema = fromJSONSchema({ enum: [{ a: 1, b: 2 }, ["x", null], "text", 1, true, null] });
+  for (const input of [{ b: 2, a: 1 }, ["x", null], "text", 1, true, null]) {
+    expect(schema.parse(input)).toBe(input);
+  }
+  for (const input of [{ a: 1 }, [null, "x"], "1", false]) {
+    expect(schema.safeParse(input).success).toBe(false);
+  }
+  expect(fromJSONSchema({ enum: [[1, 2]] }).parse([1, 2])).toEqual([1, 2]);
+});
+
+test("structural constants reject non-JSON values", () => {
+  const empty = fromJSONSchema({ const: {} });
+  expect(empty.parse(Object.create(null))).toEqual({});
+  for (const value of [new Date(), new Map(), new Set()]) {
+    expect(empty.safeParse(value).success).toBe(false);
+  }
+  const schema = fromJSONSchema({ enum: [{ a: "Symbol(x)" }, { a: "undefined" }, { a: 1 }] });
+  for (const a of [Symbol("x"), undefined, 1n, Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(schema.safeParse({ a }).success).toBe(false);
+  }
+  const cycle: { self?: unknown } = {};
+  cycle.self = cycle;
+  expect(empty.safeParse(cycle).success).toBe(false);
+});
+
 test("anyOf schema", () => {
   const schema = fromJSONSchema({
     anyOf: [{ type: "string" }, { type: "number" }],

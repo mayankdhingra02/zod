@@ -1,3 +1,5 @@
+import type { JSONType } from "./util.js";
+
 export type Schema =
   | ObjectSchema
   | ArraySchema
@@ -94,8 +96,8 @@ export type JSONSchema = {
   minProperties?: number;
   required?: string[];
   dependentRequired?: Record<string, string[]>;
-  enum?: Array<string | number | boolean | null>;
-  const?: string | number | boolean | null;
+  enum?: JSONType[];
+  const?: JSONType;
 
   // metadata
   id?: string;
